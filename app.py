@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import zipfile
+import tarfile
 import os
 import re
 from pathlib import Path
@@ -16,15 +17,15 @@ st.set_page_config(
 )
 
 st.title("Log Normalizer → CSV Export")
-st.markdown("Upload a ZIP file containing log files.")
+st.markdown("Upload a ZIP or TGZ archive containing log files.")
 
 # -----------------------------------
 # Upload File
 # -----------------------------------
 
 uploaded_file = st.file_uploader(
-    "Upload ZIP File",
-    type=["zip"]
+    "Upload ZIP or TGZ File",
+    type=["zip", "tgz", "gz"]
 )
 
 # -----------------------------------
@@ -124,28 +125,64 @@ if uploaded_file:
 
     with tempfile.TemporaryDirectory() as temp_dir:
 
-        # Save ZIP
-        zip_path = os.path.join(temp_dir, "logs.zip")
+        archive_path = os.path.join(temp_dir, uploaded_file.name)
 
-        with open(zip_path, "wb") as f:
+        # Save uploaded archive
+        with open(archive_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # Extract ZIP
+        # Extract location
         extract_dir = os.path.join(temp_dir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
 
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(extract_dir)
+        # -----------------------------------
+        # Extract ZIP
+        # -----------------------------------
 
+        if uploaded_file.name.endswith(".zip"):
+
+            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                zip_ref.extractall(extract_dir)
+
+        # -----------------------------------
+        # Extract TGZ / TAR.GZ
+        # -----------------------------------
+
+        elif (
+            uploaded_file.name.endswith(".tgz")
+            or uploaded_file.name.endswith(".tar.gz")
+            or uploaded_file.name.endswith(".gz")
+        ):
+
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(path=extract_dir)
+
+        else:
+
+            st.error("Unsupported archive format.")
+            st.stop()
+
+        # -----------------------------------
         # Find Log Files
-        log_files = list(Path(extract_dir).rglob("*.log"))
+        # -----------------------------------
 
-        st.success(f"Found {len(log_files)} log files")
+        log_files = list(Path(extract_dir).rglob("*"))
+
+        log_files = [
+            f for f in log_files
+            if f.is_file()
+        ]
+
+        st.success(f"Found {len(log_files)} files")
 
         all_rows = []
 
         progress_bar = st.progress(0)
 
-        # Process Each File
+        # -----------------------------------
+        # Process Files
+        # -----------------------------------
+
         for idx, file_path in enumerate(log_files):
 
             try:
@@ -157,7 +194,7 @@ if uploaded_file:
 
                 st.write(f"Parsing: {file_path.name} ({log_type})")
 
-                # Apache/nginx
+                # Apache/nginx logs
                 if log_type == "apache":
 
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -172,7 +209,7 @@ if uploaded_file:
                             if parsed:
                                 all_rows.append(parsed)
 
-                # CloudFront
+                # CloudFront logs
                 elif log_type == "cloudfront":
 
                     rows = parse_cloudfront(
