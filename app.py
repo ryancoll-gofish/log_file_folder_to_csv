@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import polars as pl
 import tempfile
 import zipfile
 import os
