@@ -3,6 +3,7 @@ import pandas as pd
 import tempfile
 import zipfile
 import tarfile
+import gzip
 import os
 import re
 from pathlib import Path
@@ -25,7 +26,7 @@ st.markdown("Upload a ZIP or TGZ archive containing log files.")
 
 uploaded_file = st.file_uploader(
     "Upload ZIP or TGZ File",
-    type=["zip", "tgz", "gz"]
+    type=["zip", "tgz", "gz", "tar.gz"]
 )
 
 # -----------------------------------
@@ -41,6 +42,57 @@ def detect_format(sample):
         return "apache"
 
     return "unknown"
+
+# -----------------------------------
+# Read First Line
+# Handles .log and .gz
+# -----------------------------------
+
+def read_first_line(file_path):
+
+    if str(file_path).endswith(".gz"):
+
+        with gzip.open(
+            file_path,
+            "rt",
+            encoding="utf-8",
+            errors="ignore"
+        ) as f:
+
+            return f.readline()
+
+    else:
+
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as f:
+
+            return f.readline()
+
+# -----------------------------------
+# Open File Stream
+# -----------------------------------
+
+def open_log_file(file_path):
+
+    if str(file_path).endswith(".gz"):
+
+        return gzip.open(
+            file_path,
+            "rt",
+            encoding="utf-8",
+            errors="ignore"
+        )
+
+    return open(
+        file_path,
+        "r",
+        encoding="utf-8",
+        errors="ignore"
+    )
 
 # -----------------------------------
 # Parse Apache/nginx Logs
@@ -81,7 +133,7 @@ def parse_cloudfront(file_path, source_file):
 
     rows = []
 
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+    with open_log_file(file_path) as f:
 
         headers = []
 
@@ -187,8 +239,7 @@ if uploaded_file:
 
             try:
 
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    sample = f.readline()
+                sample = read_first_line(file_path)
 
                 log_type = detect_format(sample)
 
@@ -197,7 +248,7 @@ if uploaded_file:
                 # Apache/nginx logs
                 if log_type == "apache":
 
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    with open_log_file(file_path) as f:
 
                         for line in f:
 
