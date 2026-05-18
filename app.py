@@ -17,8 +17,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("Log Normalizer → CSV Export")
-st.markdown("Upload a ZIP or TGZ archive containing log files.")
+st.title("Log Normalizer → Combined CSV Export")
+st.markdown(
+    "Upload a ZIP or TGZ archive containing nginx, Apache, or CloudFront logs."
+)
 
 # -----------------------------------
 # Upload File
@@ -45,7 +47,7 @@ def detect_format(sample):
 
 # -----------------------------------
 # Read First Line
-# Handles .log and .gz
+# Supports .log + .gz
 # -----------------------------------
 
 def read_first_line(file_path):
@@ -73,7 +75,8 @@ def read_first_line(file_path):
             return f.readline()
 
 # -----------------------------------
-# Open File Stream
+# Open Log File
+# Supports .log + .gz
 # -----------------------------------
 
 def open_log_file(file_path):
@@ -98,7 +101,7 @@ def open_log_file(file_path):
 # Parse Apache/nginx Logs
 # -----------------------------------
 
-def parse_apache_line(line, source_file):
+def parse_apache_line(line):
 
     pattern = r'^(\S+) \S+ \S+ \[(.*?)\] "(.*?)" (\d+) \S+ "(.*?)" "(.*?)"$'
 
@@ -111,25 +114,19 @@ def parse_apache_line(line, source_file):
 
     request_parts = request.split(" ")
 
-    method = request_parts[0] if len(request_parts) > 0 else None
     path = request_parts[1] if len(request_parts) > 1 else None
 
     return {
         "_time": timestamp,
-        "request.method": method,
         "request.path": path,
-        "response.status": status,
         "request.userAgent": user_agent,
-        "request.host": ip,
-        "request.referer": referer,
-        "source.file": source_file,
     }
 
 # -----------------------------------
 # Parse CloudFront Logs
 # -----------------------------------
 
-def parse_cloudfront(file_path, source_file):
+def parse_cloudfront(file_path):
 
     rows = []
 
@@ -158,33 +155,32 @@ def parse_cloudfront(file_path, source_file):
 
             rows.append({
                 "_time": f'{row.get("date", "")}T{row.get("time", "")}',
-                "request.method": row.get("cs-method"),
                 "request.path": row.get("cs-uri-stem"),
-                "response.status": row.get("sc-status"),
                 "request.userAgent": row.get("cs(User-Agent)"),
-                "request.host": row.get("cs-host"),
-                "request.referer": row.get("cs(Referer)"),
-                "source.file": source_file,
             })
 
     return rows
 
 # -----------------------------------
-# Main Upload Processing
+# Main Processing
 # -----------------------------------
 
 if uploaded_file:
 
     with tempfile.TemporaryDirectory() as temp_dir:
 
-        archive_path = os.path.join(temp_dir, uploaded_file.name)
+        archive_path = os.path.join(
+            temp_dir,
+            uploaded_file.name
+        )
 
         # Save uploaded archive
         with open(archive_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # Extract location
+        # Extraction folder
         extract_dir = os.path.join(temp_dir, "extracted")
+
         os.makedirs(extract_dir, exist_ok=True)
 
         # -----------------------------------
@@ -193,7 +189,11 @@ if uploaded_file:
 
         if uploaded_file.name.endswith(".zip"):
 
-            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+            with zipfile.ZipFile(
+                archive_path,
+                "r"
+            ) as zip_ref:
+
                 zip_ref.extractall(extract_dir)
 
         # -----------------------------------
@@ -206,7 +206,11 @@ if uploaded_file:
             or uploaded_file.name.endswith(".gz")
         ):
 
-            with tarfile.open(archive_path, "r:gz") as tar:
+            with tarfile.open(
+                archive_path,
+                "r:gz"
+            ) as tar:
+
                 tar.extractall(path=extract_dir)
 
         else:
@@ -215,10 +219,12 @@ if uploaded_file:
             st.stop()
 
         # -----------------------------------
-        # Find Log Files
+        # Find All Files
         # -----------------------------------
 
-        log_files = list(Path(extract_dir).rglob("*"))
+        log_files = list(
+            Path(extract_dir).rglob("*")
+        )
 
         log_files = [
             f for f in log_files
@@ -232,7 +238,7 @@ if uploaded_file:
         progress_bar = st.progress(0)
 
         # -----------------------------------
-        # Process Files
+        # Process Each File
         # -----------------------------------
 
         for idx, file_path in enumerate(log_files):
@@ -243,102 +249,97 @@ if uploaded_file:
 
                 log_type = detect_format(sample)
 
-                st.write(f"Parsing: {file_path.name} ({log_type})")
+                st.write(
+                    f"Parsing: {file_path.name} ({log_type})"
+                )
 
-                # Apache/nginx logs
+                # -----------------------------------
+                # Apache/nginx
+                # -----------------------------------
+
                 if log_type == "apache":
 
                     with open_log_file(file_path) as f:
 
                         for line in f:
 
-                            parsed = parse_apache_line(
-                                line,
-                                str(file_path)
-                            )
+                            parsed = parse_apache_line(line)
 
                             if parsed:
                                 all_rows.append(parsed)
 
-                # CloudFront logs
+                # -----------------------------------
+                # CloudFront
+                # -----------------------------------
+
                 elif log_type == "cloudfront":
 
-                    rows = parse_cloudfront(
-                        file_path,
-                        str(file_path)
-                    )
+                    rows = parse_cloudfront(file_path)
 
                     all_rows.extend(rows)
 
             except Exception as e:
 
-                st.error(f"Error parsing {file_path}: {e}")
+                st.error(
+                    f"Error parsing {file_path}: {e}"
+                )
 
-            progress_bar.progress((idx + 1) / len(log_files))
+            progress_bar.progress(
+                (idx + 1) / len(log_files)
+            )
 
         # -----------------------------------
-        # Output Results
+        # Output Final CSV
         # -----------------------------------
 
         if all_rows:
 
             df = pd.DataFrame(all_rows)
 
-            st.success(f"Parsed {len(df)} rows")
+            # Keep ONLY required columns
+            final_columns = [
+                "_time",
+                "request.path",
+                "request.userAgent"
+            ]
 
-            st.subheader("Preview")
+            export_df = df[final_columns].copy()
+
+            # Remove empty rows
+            export_df = export_df.dropna(
+                subset=["_time", "request.path"]
+            )
+
+            st.success(
+                f"Parsed {len(export_df)} rows"
+            )
+
+            st.subheader(
+                "Combined CSV Preview"
+            )
 
             st.dataframe(
-                df.head(50),
+                export_df.head(50),
                 use_container_width=True
             )
 
-            # CSV Export
-            csv_data = df.to_csv(index=False).encode("utf-8")
+            # -----------------------------------
+            # Export CSV
+            # -----------------------------------
+
+            csv_data = export_df.to_csv(
+                index=False
+            ).encode("utf-8")
 
             st.download_button(
-                label="Download Normalized CSV",
+                label="Download combined_data.csv",
                 data=csv_data,
-                file_name="normalized_logs.csv",
+                file_name="combined_data.csv",
                 mime="text/csv"
             )
 
-            # -----------------------------------
-            # Analytics
-            # -----------------------------------
-
-            st.subheader("Status Code Distribution")
-
-            if "response.status" in df.columns:
-
-                status_counts = (
-                    df.groupby("response.status")
-                    .size()
-                    .reset_index(name="count")
-                    .sort_values("count", ascending=False)
-                )
-
-                st.bar_chart(
-                    status_counts.set_index("response.status")
-                )
-
-            st.subheader("Top Request Paths")
-
-            if "request.path" in df.columns:
-
-                top_paths = (
-                    df.groupby("request.path")
-                    .size()
-                    .reset_index(name="count")
-                    .sort_values("count", ascending=False)
-                    .head(10)
-                )
-
-                st.dataframe(
-                    top_paths,
-                    use_container_width=True
-                )
-
         else:
 
-            st.warning("No parsable log data found.")
+            st.warning(
+                "No parsable log data found."
+            )
