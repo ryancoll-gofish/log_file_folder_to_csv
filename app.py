@@ -5,7 +5,6 @@ import zipfile
 import os
 import re
 from pathlib import Path
-from apachelogs import LogParser
 
 # -----------------------------------
 # Streamlit Config
@@ -29,14 +28,6 @@ uploaded_file = st.file_uploader(
 )
 
 # -----------------------------------
-# Apache/nginx Parser Setup
-# -----------------------------------
-
-APACHE_FORMAT = '%h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i"'
-
-parser = LogParser(APACHE_FORMAT)
-
-# -----------------------------------
 # Detect Log Format
 # -----------------------------------
 
@@ -56,27 +47,30 @@ def detect_format(sample):
 
 def parse_apache_line(line, source_file):
 
-    try:
-        entry = parser.parse(line)
+    pattern = r'^(\S+) \S+ \S+ \[(.*?)\] "(.*?)" (\d+) \S+ "(.*?)" "(.*?)"$'
 
-        request_parts = entry.request_line.split(" ")
+    match = re.match(pattern, line)
 
-        method = request_parts[0] if len(request_parts) > 0 else None
-        path = request_parts[1] if len(request_parts) > 1 else None
-
-        return {
-            "_time": str(entry.request_time),
-            "request.method": method,
-            "request.path": path,
-            "response.status": entry.final_status,
-            "request.userAgent": entry.headers_in.get("User-Agent"),
-            "request.host": entry.headers_in.get("Host"),
-            "request.referer": entry.headers_in.get("Referer"),
-            "source.file": source_file,
-        }
-
-    except Exception:
+    if not match:
         return None
+
+    ip, timestamp, request, status, referer, user_agent = match.groups()
+
+    request_parts = request.split(" ")
+
+    method = request_parts[0] if len(request_parts) > 0 else None
+    path = request_parts[1] if len(request_parts) > 1 else None
+
+    return {
+        "_time": timestamp,
+        "request.method": method,
+        "request.path": path,
+        "response.status": status,
+        "request.userAgent": user_agent,
+        "request.host": ip,
+        "request.referer": referer,
+        "source.file": source_file,
+    }
 
 # -----------------------------------
 # Parse CloudFront Logs
@@ -200,19 +194,19 @@ if uploaded_file:
 
         if all_rows:
 
-            df = pl.DataFrame(all_rows)
+            df = pd.DataFrame(all_rows)
 
             st.success(f"Parsed {len(df)} rows")
 
             st.subheader("Preview")
 
             st.dataframe(
-                df.head(50).to_pandas(),
+                df.head(50),
                 use_container_width=True
             )
 
             # CSV Export
-            csv_data = df.write_csv()
+            csv_data = df.to_csv(index=False).encode("utf-8")
 
             st.download_button(
                 label="Download Normalized CSV",
@@ -230,10 +224,10 @@ if uploaded_file:
             if "response.status" in df.columns:
 
                 status_counts = (
-                    df.group_by("response.status")
-                    .count()
-                    .sort("count", descending=True)
-                    .to_pandas()
+                    df.groupby("response.status")
+                    .size()
+                    .reset_index(name="count")
+                    .sort_values("count", ascending=False)
                 )
 
                 st.bar_chart(
@@ -245,11 +239,11 @@ if uploaded_file:
             if "request.path" in df.columns:
 
                 top_paths = (
-                    df.group_by("request.path")
-                    .count()
-                    .sort("count", descending=True)
+                    df.groupby("request.path")
+                    .size()
+                    .reset_index(name="count")
+                    .sort_values("count", ascending=False)
                     .head(10)
-                    .to_pandas()
                 )
 
                 st.dataframe(
