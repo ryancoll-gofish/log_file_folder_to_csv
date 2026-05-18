@@ -1,0 +1,7 @@
+streamlit
+pandas
+polars
+apachelogs
+duckdb
+plotly
+pyarrow
