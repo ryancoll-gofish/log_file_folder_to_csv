@@ -18,12 +18,20 @@ st.set_page_config(
 )
 
 st.title("Log Normalizer → Combined CSV Export")
+
 st.markdown(
-    "Upload a ZIP or TGZ archive containing nginx, Apache, or CloudFront logs."
+    """
+Upload a ZIP or TGZ archive containing:
+- nginx logs
+- Apache logs
+- CloudFront logs
+- .log files
+- rotated .gz logs
+"""
 )
 
 # -----------------------------------
-# Upload File
+# Upload
 # -----------------------------------
 
 uploaded_file = st.file_uploader(
@@ -40,43 +48,47 @@ def detect_format(sample):
     if "\t" in sample and "#Version:" in sample:
         return "cloudfront"
 
-    if re.search(r'"(GET|POST|PUT|DELETE)', sample):
+    if "GET" in sample or "POST" in sample:
         return "apache"
 
     return "unknown"
 
 # -----------------------------------
 # Read First Line
-# Supports .log + .gz
 # -----------------------------------
 
 def read_first_line(file_path):
 
-    if str(file_path).endswith(".gz"):
+    try:
 
-        with gzip.open(
-            file_path,
-            "rt",
-            encoding="utf-8",
-            errors="ignore"
-        ) as f:
+        if str(file_path).endswith(".gz"):
 
-            return f.readline()
+            with gzip.open(
+                file_path,
+                "rt",
+                encoding="utf-8",
+                errors="ignore"
+            ) as f:
 
-    else:
+                return f.readline()
 
-        with open(
-            file_path,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as f:
+        else:
 
-            return f.readline()
+            with open(
+                file_path,
+                "r",
+                encoding="utf-8",
+                errors="ignore"
+            ) as f:
+
+                return f.readline()
+
+    except Exception:
+
+        return ""
 
 # -----------------------------------
 # Open Log File
-# Supports .log + .gz
 # -----------------------------------
 
 def open_log_file(file_path):
@@ -98,29 +110,54 @@ def open_log_file(file_path):
     )
 
 # -----------------------------------
-# Parse Apache/nginx Logs
+# Flexible nginx/apache Parser
 # -----------------------------------
 
 def parse_apache_line(line):
 
-    pattern = r'^(\S+) \S+ \S+ \[(.*?)\] "(.*?)" (\d+) \S+ "(.*?)" "(.*?)"$'
+    try:
 
-    match = re.match(pattern, line)
+        # Timestamp
+        time_match = re.search(
+            r'\[(.*?)\]',
+            line
+        )
 
-    if not match:
+        # Request Path
+        request_match = re.search(
+            r'"(GET|POST|PUT|DELETE|HEAD|OPTIONS)\s(.*?)\sHTTP',
+            line
+        )
+
+        # Quoted strings
+        quoted_strings = re.findall(
+            r'"(.*?)"',
+            line
+        )
+
+        if not time_match or not request_match:
+            return None
+
+        timestamp = time_match.group(1)
+
+        path = request_match.group(2)
+
+        # Last quoted string is usually user agent
+        user_agent = (
+            quoted_strings[-1]
+            if len(quoted_strings) > 0
+            else ""
+        )
+
+        return {
+            "_time": timestamp,
+            "request.path": path,
+            "request.userAgent": user_agent,
+        }
+
+    except Exception:
+
         return None
-
-    ip, timestamp, request, status, referer, user_agent = match.groups()
-
-    request_parts = request.split(" ")
-
-    path = request_parts[1] if len(request_parts) > 1 else None
-
-    return {
-        "_time": timestamp,
-        "request.path": path,
-        "request.userAgent": user_agent,
-    }
 
 # -----------------------------------
 # Parse CloudFront Logs
@@ -137,7 +174,13 @@ def parse_cloudfront(file_path):
         for line in f:
 
             if line.startswith("#Fields:"):
-                headers = line.strip().replace("#Fields: ", "").split("\t")
+
+                headers = (
+                    line.strip()
+                    .replace("#Fields: ", "")
+                    .split("\t")
+                )
+
                 continue
 
             if line.startswith("#"):
@@ -179,9 +222,15 @@ if uploaded_file:
             f.write(uploaded_file.getbuffer())
 
         # Extraction folder
-        extract_dir = os.path.join(temp_dir, "extracted")
+        extract_dir = os.path.join(
+            temp_dir,
+            "extracted"
+        )
 
-        os.makedirs(extract_dir, exist_ok=True)
+        os.makedirs(
+            extract_dir,
+            exist_ok=True
+        )
 
         # -----------------------------------
         # Extract ZIP
@@ -194,7 +243,9 @@ if uploaded_file:
                 "r"
             ) as zip_ref:
 
-                zip_ref.extractall(extract_dir)
+                zip_ref.extractall(
+                    extract_dir
+                )
 
         # -----------------------------------
         # Extract TGZ / TAR.GZ
@@ -211,15 +262,20 @@ if uploaded_file:
                 "r:gz"
             ) as tar:
 
-                tar.extractall(path=extract_dir)
+                tar.extractall(
+                    path=extract_dir
+                )
 
         else:
 
-            st.error("Unsupported archive format.")
+            st.error(
+                "Unsupported archive format."
+            )
+
             st.stop()
 
         # -----------------------------------
-        # Find All Files
+        # Find ALL files
         # -----------------------------------
 
         log_files = list(
@@ -231,14 +287,16 @@ if uploaded_file:
             if f.is_file()
         ]
 
-        st.success(f"Found {len(log_files)} files")
+        st.success(
+            f"Found {len(log_files)} files"
+        )
 
         all_rows = []
 
         progress_bar = st.progress(0)
 
         # -----------------------------------
-        # Process Each File
+        # Process Files
         # -----------------------------------
 
         for idx, file_path in enumerate(log_files):
@@ -247,6 +305,10 @@ if uploaded_file:
 
                 sample = read_first_line(file_path)
 
+                # DEBUG
+                st.write(f"Sample from {file_path.name}")
+                st.code(sample)
+
                 log_type = detect_format(sample)
 
                 st.write(
@@ -254,7 +316,7 @@ if uploaded_file:
                 )
 
                 # -----------------------------------
-                # Apache/nginx
+                # nginx/apache
                 # -----------------------------------
 
                 if log_type == "apache":
@@ -289,25 +351,28 @@ if uploaded_file:
             )
 
         # -----------------------------------
-        # Output Final CSV
+        # Export Final CSV
         # -----------------------------------
 
         if all_rows:
 
             df = pd.DataFrame(all_rows)
 
-            # Keep ONLY required columns
             final_columns = [
                 "_time",
                 "request.path",
                 "request.userAgent"
             ]
 
-            export_df = df[final_columns].copy()
+            export_df = df[
+                final_columns
+            ].copy()
 
-            # Remove empty rows
             export_df = export_df.dropna(
-                subset=["_time", "request.path"]
+                subset=[
+                    "_time",
+                    "request.path"
+                ]
             )
 
             st.success(
@@ -322,10 +387,6 @@ if uploaded_file:
                 export_df.head(50),
                 use_container_width=True
             )
-
-            # -----------------------------------
-            # Export CSV
-            # -----------------------------------
 
             csv_data = export_df.to_csv(
                 index=False
