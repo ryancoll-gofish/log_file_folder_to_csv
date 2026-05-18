@@ -4,6 +4,7 @@ import tempfile
 import zipfile
 import tarfile
 import gzip
+import io
 import os
 import re
 from pathlib import Path
@@ -31,13 +32,19 @@ Upload a ZIP or TGZ archive containing:
 )
 
 # -----------------------------------
-# Upload
+# Upload File
 # -----------------------------------
 
 uploaded_file = st.file_uploader(
     "Upload ZIP or TGZ File",
     type=["zip", "tgz", "gz", "tar.gz"]
 )
+
+# -----------------------------------
+# Download Area (Top)
+# -----------------------------------
+
+download_placeholder = st.empty()
 
 # -----------------------------------
 # Detect Log Format
@@ -142,7 +149,7 @@ def parse_apache_line(line):
 
         path = request_match.group(2)
 
-        # Last quoted string is usually user agent
+        # Last quoted string = user agent
         user_agent = (
             quoted_strings[-1]
             if len(quoted_strings) > 0
@@ -217,11 +224,11 @@ if uploaded_file:
             uploaded_file.name
         )
 
-        # Save uploaded archive
+        # Save archive
         with open(archive_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
-        # Extraction folder
+        # Extract folder
         extract_dir = os.path.join(
             temp_dir,
             "extracted"
@@ -248,7 +255,7 @@ if uploaded_file:
                 )
 
         # -----------------------------------
-        # Extract TGZ / TAR.GZ
+        # Extract TGZ/TAR.GZ
         # -----------------------------------
 
         elif (
@@ -275,7 +282,7 @@ if uploaded_file:
             st.stop()
 
         # -----------------------------------
-        # Find ALL files
+        # Find Files
         # -----------------------------------
 
         log_files = list(
@@ -304,10 +311,6 @@ if uploaded_file:
             try:
 
                 sample = read_first_line(file_path)
-
-                # DEBUG
-                st.write(f"Sample from {file_path.name}")
-                st.code(sample)
 
                 log_type = detect_format(sample)
 
@@ -358,14 +361,13 @@ if uploaded_file:
 
             df = pd.DataFrame(all_rows)
 
-            final_columns = [
-                "_time",
-                "request.path",
-                "request.userAgent"
-            ]
-
+            # Required schema only
             export_df = df[
-                final_columns
+                [
+                    "_time",
+                    "request.path",
+                    "request.userAgent"
+                ]
             ].copy()
 
             export_df = export_df.dropna(
@@ -388,15 +390,67 @@ if uploaded_file:
                 use_container_width=True
             )
 
-            csv_data = export_df.to_csv(
-                index=False
-            ).encode("utf-8")
+            # -----------------------------------
+            # Compress CSV
+            # -----------------------------------
 
-            st.download_button(
-                label="Download combined_data.csv",
-                data=csv_data,
-                file_name="combined_data.csv",
-                mime="text/csv"
+            csv_buffer = io.StringIO()
+
+            export_df.to_csv(
+                csv_buffer,
+                index=False
+            )
+
+            csv_bytes = csv_buffer.getvalue().encode(
+                "utf-8"
+            )
+
+            compressed_buffer = io.BytesIO()
+
+            with gzip.GzipFile(
+                filename="combined_data.csv.gz",
+                mode="wb",
+                fileobj=compressed_buffer
+            ) as gz_file:
+
+                gz_file.write(csv_bytes)
+
+            compressed_data = compressed_buffer.getvalue()
+
+            compressed_size_mb = (
+                len(compressed_data)
+                / (1024 * 1024)
+            )
+
+            st.write(
+                f"Compressed export size: "
+                f"{compressed_size_mb:.2f} MB"
+            )
+
+            # -----------------------------------
+            # Hard Limit
+            # -----------------------------------
+
+            MAX_MB = 100
+
+            if compressed_size_mb > MAX_MB:
+
+                st.error(
+                    f"Compressed export exceeds "
+                    f"{MAX_MB}MB limit."
+                )
+
+                st.stop()
+
+            # -----------------------------------
+            # Download Button at TOP
+            # -----------------------------------
+
+            download_placeholder.download_button(
+                label="Download combined_data.csv.gz",
+                data=compressed_data,
+                file_name="combined_data.csv.gz",
+                mime="application/gzip"
             )
 
         else:
