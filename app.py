@@ -20,16 +20,19 @@ st.set_page_config(
 
 st.title("Log Normalizer → Combined CSV Export")
 
-st.markdown(
-    """
+st.markdown("""
 Upload a ZIP or TGZ archive containing:
 - nginx logs
 - Apache logs
 - CloudFront logs
-- .log files
 - rotated .gz logs
-"""
-)
+""")
+
+# -----------------------------------
+# Download Placeholder AT TOP
+# -----------------------------------
+
+download_placeholder = st.empty()
 
 # -----------------------------------
 # Upload File
@@ -39,12 +42,6 @@ uploaded_file = st.file_uploader(
     "Upload ZIP or TGZ File",
     type=["zip", "tgz", "gz", "tar.gz"]
 )
-
-# -----------------------------------
-# Download Area (Top)
-# -----------------------------------
-
-download_placeholder = st.empty()
 
 # -----------------------------------
 # Detect Log Format
@@ -224,7 +221,7 @@ if uploaded_file:
             uploaded_file.name
         )
 
-        # Save archive
+        # Save uploaded archive
         with open(archive_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
@@ -282,7 +279,7 @@ if uploaded_file:
             st.stop()
 
         # -----------------------------------
-        # Find Files
+        # Find All Files
         # -----------------------------------
 
         log_files = list(
@@ -318,10 +315,7 @@ if uploaded_file:
                     f"Parsing: {file_path.name} ({log_type})"
                 )
 
-                # -----------------------------------
-                # nginx/apache
-                # -----------------------------------
-
+                # nginx/apache logs
                 if log_type == "apache":
 
                     with open_log_file(file_path) as f:
@@ -333,10 +327,7 @@ if uploaded_file:
                             if parsed:
                                 all_rows.append(parsed)
 
-                # -----------------------------------
-                # CloudFront
-                # -----------------------------------
-
+                # CloudFront logs
                 elif log_type == "cloudfront":
 
                     rows = parse_cloudfront(file_path)
@@ -354,14 +345,14 @@ if uploaded_file:
             )
 
         # -----------------------------------
-        # Export Final CSV
+        # Final Export
         # -----------------------------------
 
         if all_rows:
 
             df = pd.DataFrame(all_rows)
 
-            # Required schema only
+            # EXACT REQUIRED FORMAT
             export_df = df[
                 [
                     "_time",
@@ -370,6 +361,7 @@ if uploaded_file:
                 ]
             ].copy()
 
+            # Remove invalid rows
             export_df = export_df.dropna(
                 subset=[
                     "_time",
@@ -381,17 +373,8 @@ if uploaded_file:
                 f"Parsed {len(export_df)} rows"
             )
 
-            st.subheader(
-                "Combined CSV Preview"
-            )
-
-            st.dataframe(
-                export_df.head(50),
-                use_container_width=True
-            )
-
             # -----------------------------------
-            # Compress CSV
+            # Create CSV
             # -----------------------------------
 
             csv_buffer = io.StringIO()
@@ -404,6 +387,10 @@ if uploaded_file:
             csv_bytes = csv_buffer.getvalue().encode(
                 "utf-8"
             )
+
+            # -----------------------------------
+            # Compress CSV
+            # -----------------------------------
 
             compressed_buffer = io.BytesIO()
 
@@ -443,7 +430,7 @@ if uploaded_file:
                 st.stop()
 
             # -----------------------------------
-            # Download Button at TOP
+            # DOWNLOAD BUTTON AT TOP
             # -----------------------------------
 
             download_placeholder.download_button(
@@ -451,6 +438,19 @@ if uploaded_file:
                 data=compressed_data,
                 file_name="combined_data.csv.gz",
                 mime="application/gzip"
+            )
+
+            # -----------------------------------
+            # Preview
+            # -----------------------------------
+
+            st.subheader(
+                "Combined CSV Preview"
+            )
+
+            st.dataframe(
+                export_df.head(50),
+                use_container_width=True
             )
 
         else:
